@@ -439,7 +439,6 @@ fn wav(seconds: u32) -> Vec<u8> {
 // ---------------------------------------------------------------------------------------------
 // OcrPages, provider path
 
-
 #[tokio::test]
 async fn ocr_missing_page_is_invalid_request() {
     let (base, calls) = scripted("/v1/ocr", vec![(200, ocr_reply(&[0]))]).await;

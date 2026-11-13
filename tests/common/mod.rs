@@ -747,4 +747,3 @@ async fn wait_http_healthy(url: &str, within: std::time::Duration) -> Result<(),
         within.as_secs()
     ))
 }
-

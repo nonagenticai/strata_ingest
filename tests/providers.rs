@@ -181,7 +181,6 @@ fn usage_cost_is_none_unless_units_and_price_are_known() {
     );
 }
 
-
 #[tokio::test]
 async fn ocr_sends_pages_and_data_url() {
     let (base, cap) = capture_mock("/v1/ocr", StatusCode::OK, fixture("mistral_ocr.json")).await;
@@ -281,7 +280,6 @@ async fn missing_usage_is_none_not_zero() {
     assert_eq!(out.duration_s, Some(12.3));
 }
 
-
 #[tokio::test]
 async fn vision_sends_image_part_and_exact_prompt() {
     assert_eq!(
@@ -325,7 +323,6 @@ async fn vision_sends_image_part_and_exact_prompt() {
     );
 }
 
-
 #[tokio::test]
 async fn transcribe_sends_verbose_json_multipart() {
     let (base, cap) = capture_mock(
@@ -365,7 +362,6 @@ async fn transcribe_sends_verbose_json_multipart() {
     }
 }
 
-
 #[tokio::test]
 async fn retry_after_of_a_429_reaches_the_step_error() {
     let app = Router::new().route(
@@ -389,7 +385,6 @@ async fn retry_after_of_a_429_reaches_the_step_error() {
     let s: StepError = e.into();
     assert_eq!(s.retry_after_s, Some(42));
 }
-
 
 #[derive(Clone, Default)]
 struct InFlight {

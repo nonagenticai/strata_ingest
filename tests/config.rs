@@ -364,10 +364,7 @@ fn config_defaults() {
     let cfg = Config::from_map(&e).expect("valid");
     assert_eq!(cfg.bind.to_string(), "127.0.0.1:9135");
     // storage_service in-cluster; the token is optional (tokenless = platform tenant).
-    assert_eq!(
-        cfg.storage_url,
-        "http://127.0.0.1:8391"
-    );
+    assert_eq!(cfg.storage_url, "http://127.0.0.1:8391");
     assert_eq!(cfg.storage_bucket, "strata-ingest");
     assert!(cfg.storage_token.is_none());
     assert_eq!(cfg.docling_url, "http://127.0.0.1:5002");

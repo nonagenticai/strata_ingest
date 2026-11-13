@@ -853,8 +853,16 @@ mod tests {
     #[test]
     fn default_provider_funding_by_host() {
         let cases = [
-            ("http://provider.example.internal:9131", "local_gpu", "provider"),
-            ("http://provider.example.internal:9131/v1", "local_gpu", "provider"),
+            (
+                "http://provider.example.internal:9131",
+                "local_gpu",
+                "provider",
+            ),
+            (
+                "http://provider.example.internal:9131/v1",
+                "local_gpu",
+                "provider",
+            ),
             ("http://127.0.0.1:9130/v1", "local_gpu", "local"),
             ("http://10.0.0.4/v1", "local_gpu", "local"),
             ("http://100.64.0.9:9131", "local_gpu", "local"),
