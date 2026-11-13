@@ -1,0 +1,2 @@
+# Paths the fleet secret scanner must not report.
+# One `fingerprint` or `path:rule` entry per line, each with a reason above it.

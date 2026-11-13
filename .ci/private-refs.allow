@@ -1,0 +1,31 @@
+# Allowlist for scripts/ci/no-private-refs.sh — a security decision, not a convenience.
+#
+# One rule per line, `path/glob:pattern  # justification`. The glob matches the repo-relative
+# path; the pattern is an ERE matched against the whole `git grep` hit (`path:line:text`).
+# Blank lines and `#` comments are ignored. A justification is mandatory in review.
+#
+# ⛔ Do NOT add an entry to keep a real internal hostname, address or private repository path
+# in a public tree. Remove it instead. An entry is only for a string that *looks* private but
+# is not: a documented loopback example, a placeholder, or a term that collides with a rule.
+#
+# The guard and this file necessarily spell the patterns out; the guard excludes both from
+# its own scan. Everything else is scanned.
+#
+# No entries by default. An empty file that fails the build is the correct starting state.
+
+# --- strata_ingest, reviewed 2026-11-14 ------------------------------------------------------
+# The outbound-URL guard's denylist: these suffixes ARE the control. No host is named.
+src/netguard.rs:.*"\.(internal|local|localhost|svc|cluster\.local|lan|home\.arpa)",?$
+src/netguard.rs:.*`\.internal`, `\.local`, `\.svc`.*
+src/metering.rs:.*ends_with\("\.internal"\).*
+src/metering.rs:.*`\*\.internal`, `\*\.svc…`.*
+src/api/handlers.rs:.*dotless, `\.internal`.*
+README.md:.*no dotless / `\.internal`.*
+README.md:.*`\*\.internal`, `\*\.svc…`.*
+# Refusal/classification fixtures: synthetic names and CGNAT literals the guard must reject.
+src/netguard.rs:.*(100\.64\.|100\.100\.1\.1:443|100\.81\.177\.99|example\.internal|example\.svc\.cluster\.local|foo\.internal\.).*
+src/metering.rs:.*(example\.internal|example\.svc\.cluster\.local|100\.64\.0\.9).*
+tests/api.rs:.*(100\.64\.|example\.internal|example\.svc\.cluster\.local).*
+tests/config.rs:.*example\.svc\.cluster\.local.*
+tests/crawl.rs:.*intranet\.example\.internal.*
+tests/sources.rs:.*storage\.example\.internal.*

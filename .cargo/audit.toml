@@ -1,0 +1,12 @@
+# cargo-audit config (read by the rust-library archetype's `cargo audit` step).
+[advisories]
+ignore = [
+  # RUSTSEC-2026-0459: libsqlite3-sys (CVE-2026-119375) — SQLite can return uninitialised
+  # page-cache memory when a process opens a crafted database file together with a sibling
+  # -wal file. The crate is reachable ONLY as an optional dependency of sqlx-sqlite; sqlx
+  # 0.9.0 here sets `default-features = false` and enables only postgres, so SQLite is never
+  # compiled, never linked and never opens a database in this workspace. No fixed release is
+  # reachable: sqlx 0.9.0 (the newest) pins libsqlite3-sys >=0.30.1, <0.38.0, while the patch
+  # is in 0.39.x. Revisit when a newer sqlx raises that bound.
+  "RUSTSEC-2026-0459",
+]

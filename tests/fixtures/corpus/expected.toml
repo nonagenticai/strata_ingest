@@ -1,0 +1,42 @@
+# What tests/e2e.rs requires of each fixture's delivered bundle. Matching ignores case and
+# collapses runs of whitespace (line wrapping differs per format).
+
+# Distinctive text per page of source.md (= per page of born_digital.pdf).
+[pages]
+page1 = [
+    "Quillmere Harbour Survey",
+    "Northern Breakwater",
+    "quarried at Tolverran",
+    "Penhallow foundry",
+    "records the water level every ten minutes",
+]
+page2 = [
+    "Channel Soundings",
+    "measured at the lowest spring tide",
+    "silt from the Merrow estuary",
+    "worn thin where it rubs the seabed",
+]
+page3 = [
+    "Lighthouse and Signals",
+    "Saltreach lighthouse",
+    "floats on a bath of mercury",
+    "one long blast every thirty seconds",
+    "test the foghorn air receiver",
+]
+
+# The soundings table (page 2): each row's cells must sit on one markdown table row.
+[table]
+rows = [
+    ["Amberline", "7.4", "coarse sand"],
+    ["Brackenwhite", "6.9", "shingle"],
+    ["Cormorant Gap", "5.2", "soft mud"],
+    ["Dunlin Spit", "4.8", "shell grit"],
+]
+
+# Fixtures whose text layer is the whole of source.md (all pages' snippets + the table).
+[born_digital]
+files = ["born_digital.pdf", "tables.docx", "book.epub", "slides.pptx", "page.html", "document.odt"]
+
+# docling-cpu OCR (easyocr) of scanned.pdf must find at least this share of all page snippets.
+[scanned]
+min_snippet_rate = 0.8

@@ -1,0 +1,84 @@
+[package]
+license = "Apache-2.0"
+name = "strata-ingest"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Turns uploaded files and URLs into markdown bundles and delivers them to strata; CPU-only, optional HTTP providers for OCR, captions and transcription"
+
+[[bin]]
+name = "strata-ingest"
+path = "src/main.rs"
+
+[features]
+default = []
+# `testutil::spawn` for integration tests (enabled by the self dev-dependency below).
+testutil = []
+
+[dependencies]
+# Versions match strata_rag's Cargo.toml / Cargo.lock where the crates overlap.
+tokio = { version = "1.53.3", features = ["full"] }
+axum = { version = "0.8.9", features = ["multipart"] }
+# Router layers as strata_rag: request body limit + trace; constant-time token compare.
+tower-http = { version = "0.7.1", features = ["trace", "limit"] }
+subtle = "2.6.1"
+# URL validation for URL jobs (already in the tree via reqwest).
+url = "2.5.8"
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "migrate",
+    "macros", # for `sqlx::migrate!` only; queries are runtime `sqlx::query`
+    "json",
+] }
+uuid = { version = "1.28.0", features = ["v7", "v8", "serde"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+thiserror = "2.0.21"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.2"
+chrono = { version = "0.4.45", features = ["serde"] }
+reqwest = { version = "0.13.5", features = ["json", "multipart", "stream"] }
+governor = "0.10.4"
+base64 = "0.23.1"
+# Deterministic figure asset ids (UUIDv8 over sha256).
+sha2 = { version = "0.11.1", default-features = false }
+bytes = "1.12.1"
+futures = "0.3.34"
+tokio-util = "0.7.20"
+# Scratch files: ffmpeg dirs (audio/video Convert), upload spool (API), zip download (Detect).
+tempfile = "3.27.0"
+infer = { version = "0.22.0", default-features = false }
+zip = { version = "=9.0.4", default-features = false, features = ["deflate"] }
+# api / datatable sources (src/sources): CSV rows, XLSX sheets (zip + quick-xml; calamine needs
+# zip ^8.6, whose releases are all yanked).
+csv = "1.4.0"
+quick-xml = "0.42.0"
+# Gzipped sitemaps (`.xml.gz`); already in the tree via zip's deflate, same backend (zlib-rs).
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+# Tenant provider keys at rest (AES-256-GCM, key from STRATA_INGEST_PROVIDER_KEY): same crate and
+# version as strata_rag.
+aes-gcm = "=0.11.1"
+# Cost events to billing-service's `billing:costs` stream (src/metering.rs); version as care-bus.
+redis = { version = "1.7.1", default-features = false, features = ["tokio-comp", "streams", "aio", "connection-manager"] }
+
+[dev-dependencies]
+strata-ingest = { path = ".", features = ["testutil"] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+tower = { version = "0.5", features = ["util"] }
+# `atexit` removes the per-binary Postgres test container (statics are never dropped).
+libc = "0.2.190"
+# Paused clock in unit tests (`#[tokio::test(start_paused = true)]`).
+tokio = { version = "1.53.3", features = ["full", "test-util"] }
+
+# Disk on the dev box is tight (rulings R7): keep target/ small.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

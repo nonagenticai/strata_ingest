@@ -1,0 +1,31 @@
+# Local dev dependencies only (not used by CI or the cluster). Same port inside and outside.
+#   postgres 5441 · docling-serve (CPU) 5002
+# Blobs and virus scanning go through the in-cluster storage_service (STRATA_INGEST_STORAGE_URL);
+# there is no MinIO or ClamAV of our own.
+# Public images from Docker Hub.
+services:
+  postgres:
+    image: postgres:18-alpine
+    command: ["postgres", "-p", "5441"]
+    environment:
+      POSTGRES_USER: strata_ingest
+      POSTGRES_PASSWORD: strata_ingest # dev only; matches DEFAULT_DATABASE_URL
+      POSTGRES_DB: strata_ingest
+    ports:
+      - "127.0.0.1:5441:5441"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-p", "5441", "-U", "strata_ingest"]
+      interval: 5s
+      retries: 20
+
+  docling:
+    image: docling-project/docling-serve-cpu:v1.37.0
+    # DOCLING_SERVE_PORT is ignored by this image; the port is set on the command line.
+    command: ["docling-serve", "run", "--host", "0.0.0.0", "--port", "5002"]
+    ports:
+      - "127.0.0.1:5002:5002"
+
+volumes:
+  pgdata:
