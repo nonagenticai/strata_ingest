@@ -1,0 +1,203 @@
+# CI for a PUBLIC repository — self-contained, GitHub-hosted runners.
+#
+# ⛔ Why this file replaces `.github/workflows/ci.yml` rather than extending it:
+#   1. A public repo CANNOT consume the estate archetype
+#      (the estate's private `rust-service.yml` archetype): a public
+#      workflow cannot read a private repo. The run does not fail — it dies at startup with
+#      zero jobs.
+#   2. A public repo CANNOT use the ARC self-hosted pools. Both org runner groups have
+#      `allows_public_repositories:false`, and that must stay false: a fork PR can edit
+#      `runs-on`, so a self-hosted runner open to a public repo is arbitrary untrusted code
+#      inside the estate network. A job that asks for one sits QUEUED forever, with no
+#      error anywhere, and `check-failures.sh` cannot see it (it queries only completed runs).
+#   3. GitHub-hosted standard runners are free and unlimited on public repos.
+#
+# ⛔ Every job is gated on `!github.event.repository.private`. The org's Actions billing is in
+#    a failed state, so a PRIVATE repo cannot start an ubuntu-latest job at all — it fails
+#    UNSTARTED (steps: [], startedAt == createdAt, no log). The gate lets this file land while
+#    the repo is private (jobs report "skipped", never red) and activate with zero edits at the
+#    flip. The consequence is load-bearing: CI CANNOT be verified before the flip, so the first
+#    real run is the one immediately after it.
+#
+# The gates below are the archetype's, copied: fmt, clippy -D warnings, nextest + doctests,
+# cargo audit, plus a secret scan and a private-reference scan.
+#
+# Nothing here needs a repository secret. The only token is the automatic one, used to push
+# an image from main.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never cancel a run for main: its image job is what publishes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Credentials first. A public repo is where a leak does the most damage.
+  # `--config` IS REQUIRED: without it betterleaks scans with its BUILT-IN defaults, which
+  # are not gitleaks' defaults and produce hundreds of false positives on local dev DSNs.
+  secret-scan:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: install betterleaks 1.10.1 (pinned, sha256-verified)
+        run: |
+          set -euo pipefail
+          version=1.10.1
+          sha=c174b42d7aa60caf58c0c3e555c0e4bed01fe6b0d99a412bce777b5af4ce913e
+          curl -fsSL -o "$RUNNER_TEMP/betterleaks.tgz" \
+            "https://github.com/betterleaks/betterleaks/releases/download/v${version}/betterleaks_${version}_linux_x64.tar.gz"
+          echo "${sha}  $RUNNER_TEMP/betterleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/betterleaks.tgz" -C "$RUNNER_TEMP" betterleaks
+      - name: scan the tree
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/betterleaks" dir --redact --exit-code 1 --no-banner \
+            --config=.betterleaks.toml \
+            --gitleaks-ignore-path .betterleaksignore .
+
+  # Private infrastructure must not be published: internal hostnames, tailnet addresses,
+  # private repo paths — the half a credential scanner does not catch.
+  # Run the same script locally before pushing: `bash scripts/ci/no-private-refs.sh`.
+  no-private-refs:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: scan tracked files
+        run: bash scripts/ci/no-private-refs.sh
+
+  checks:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Drops the DWARF, which is what makes target/ multi-gigabyte.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379/
+      PG_IMAGE: postgres:18
+      REDIS_IMAGE: library/redis:8.10.1-alpine
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: toolchain follows rust-toolchain.toml
+        run: |
+          set -euo pipefail
+          rustup show
+          rustc --version
+
+      - uses: actions/cache@v6
+        with:
+          # Registry only: target/ is multi-gigabyte and would thrash the 10 GB cache budget.
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # ⛔ Both storage choices below are load-bearing and they are different resources.
+      #   --shm-size: Docker's default /dev/shm is 64 MB and Postgres parallel workers
+      #     allocate dynamic shared memory there (53100 dsm_impl.c).
+      #   NO --tmpfs for the data directory: a tmpfs is RAM-backed and capped at half the
+      #     RAM, while every test that needs a fresh database creates one (53100 md.c).
+      - name: start Postgres 18 and Redis
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name ci-pg \
+            -e POSTGRES_PASSWORD=postgres \
+            --shm-size=1g \
+            -p 127.0.0.1:5432:5432 \
+            "$PG_IMAGE" -c fsync=off -c max_connections=300
+          docker run -d --name ci-redis \
+            --tmpfs /data -p 127.0.0.1:6379:6379 \
+            "$REDIS_IMAGE"
+          for _ in $(seq 1 60); do
+            docker exec ci-pg pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec ci-pg pg_isready -h 127.0.0.1 -U postgres
+          for _ in $(seq 1 60); do
+            docker exec ci-redis redis-cli ping >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec ci-redis redis-cli ping
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo nextest (0.9.150 pinned, sha256-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/nextest.tgz" \
+            "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/cargo-nextest-0.9.150-x86_64-unknown-linux-gnu.tar.gz"
+          echo "b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f  $RUNNER_TEMP/nextest.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/nextest.tgz" -C "$RUNNER_TEMP" cargo-nextest
+          "$RUNNER_TEMP/cargo-nextest" nextest run --no-tests=fail --color never --locked
+          cargo test --doc --locked
+
+      - name: cargo audit 0.22.2 (pinned, sha256-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/audit.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz"
+          echo "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428  $RUNNER_TEMP/audit.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/audit.tgz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v0.22.2/cargo-audit" audit
+
+  # Build (and on main, publish) the image. OFF by default: it only makes sense for a repo
+  # that is deployed. To enable, set the repository variable `PUBLISH_IMAGE=true`.
+  # On a PR this is a build+smoke check only; fork tokens are read-only.
+  #
+  # The smoke is THIS binary's, not the template's: `--version` proves it links and runs, and
+  # there is no `--print-openapi`.
+  image:
+    if: ${{ !github.event.repository.private && vars.PUBLISH_IMAGE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # A variable, not a literal: a bare `name:tag` on a docker line reads as a Docker Hub ref.
+      IMG: strata_ingest:ci
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: build
+        run: docker build --file Dockerfile --tag "$IMG" .
+
+      - name: smoke
+        run: |
+          set -euo pipefail
+          docker run --rm "$IMG" --version
+          docker run --rm --entrypoint sh "$IMG" -c '! ldd /usr/local/bin/strata-ingest | grep -q "not found"'
+
+      - name: push to ghcr.io (main only)
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/${{ github.repository_owner }}/strata_ingest"
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          sha="sha-${GITHUB_SHA::7}"
+          run="$(printf 'main-%06d' "${{ github.run_number }}")"
+          for tag in "$sha" "$run" latest; do
+            docker tag "$IMG" "$ref:$tag"
+            docker push "$ref:$tag"
+          done
+          echo "pushed $ref:$sha $ref:$run $ref:latest"

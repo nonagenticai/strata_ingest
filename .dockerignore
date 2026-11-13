@@ -1,0 +1,18 @@
+# Build outputs, other checkouts and session notes.
+target/
+.worktrees/
+.superpowers/
+.git/
+.github/
+# Tests and their fixtures (4+ MB corpus) are not needed to build or serve.
+tests/
+# Secrets and local env files never enter the build context.
+.env
+*.env
+# Not part of the build.
+docs/
+README.md
+CLAUDE.md
+docker-compose.yml
+Dockerfile
+.dockerignore

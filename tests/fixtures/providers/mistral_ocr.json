@@ -1,0 +1,28 @@
+{
+  "pages": [
+    {
+      "index": 0,
+      "markdown": "# Quarterly report\n\nRevenue grew 12% year over year.\n\n![img-0.jpeg](img-0.jpeg)",
+      "images": [
+        {
+          "id": "img-0.jpeg",
+          "top_left_x": 140,
+          "top_left_y": 512,
+          "bottom_right_x": 1560,
+          "bottom_right_y": 1210,
+          "image_base64": null
+        }
+      ],
+      "dimensions": { "dpi": 200, "height": 2200, "width": 1700 }
+    },
+    {
+      "index": 2,
+      "markdown": "## Outlook\n\n| Quarter | Target |\n| --- | --- |\n| Q1 | 4.1 |\n| Q2 | 4.3 |",
+      "images": [],
+      "dimensions": { "dpi": 200, "height": 2200, "width": 1700 }
+    }
+  ],
+  "model": "mistral-ocr-2505",
+  "document_annotation": null,
+  "usage_info": { "pages_processed": 2, "doc_size_bytes": 184321 }
+}

@@ -1,0 +1,12 @@
+{
+  "pages": [
+    {
+      "index": 0,
+      "markdown": "Scanned page with no usage reported.",
+      "images": [],
+      "dimensions": { "dpi": 200, "height": 2200, "width": 1700 }
+    }
+  ],
+  "model": "mistral-ocr-2505",
+  "document_annotation": null
+}

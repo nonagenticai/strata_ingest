@@ -1,0 +1,244 @@
+# conveyor carries the fleet betterleaks rule set, so it can own its allowlist.
+# Rules are copied from the fleet config (gitops-production); only the block at the
+# end is repo-specific. A real credential is rotated, never allowlisted.
+
+# FLEET betterleaks config — used by every repo that does NOT carry its own
+# `.betterleaks.toml`.
+#
+# Two consumers, one file:
+#   * CI  — `.github/actions/secret-scan/action.yml` feeds it to betterleaks via
+#           `--config`. It ships inside the composite-action directory
+#           precisely so it travels to consumer repos that have no gitops
+#           checkout.
+#   * local — `scripts/hooks/install.sh` copies it to `<repo>/.git/betterleaks-fleet.toml`
+#           for the pre-commit / pre-push hooks.
+#
+# ⛔ This file is NOT used by gitops-production itself. Both the action and the
+# hooks prefer a repo-local `.betterleaks.toml` when one exists, so this repo keeps
+# its own rules, its own allowlist and its own baseline. Do not "unify" them:
+# gitops has 33 adjudicated baseline entries that mean nothing anywhere else.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# WHY THIS IS NOT JUST A COPY OF .betterleaks.toml — three deltas, all measured
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Replayed 2026-08-17 over 2026-05-17..2026-08-17 in all 72 repos that consume
+# the ts-service / python-service / go-service / image-only archetypes, using
+# the same git-range scan the CI action performs:
+#
+#   config                                        repos with >=1 finding
+#   ------------------------------------------    ----------------------
+#   gitops-production/.betterleaks.toml verbatim              30 / 72
+#   + the three deltas below                                8 / 72
+#
+# The 30/72 result is why the 2026-08-17 handoff recorded "propagating the rule
+# to the CI archetypes would red 19 repos today". That was correct FOR THAT
+# CONFIG. It is not a reason to skip the rollout; it is a reason to measure the
+# false-positive population and remove it, which is what the deltas do.
+#
+# Of the 12 findings that survive in those 8 repos, 4 are REAL (the kag gateway
+# service token, already known and accepted) and 8 are pre-existing test
+# fixtures. A range scan only re-fires them if a PR touches those lines.
+#
+# ── delta 1: disabledRules = ["generic-api-key"] ────────────────────────────
+# 674 of the 686 upstream-rule hits in the replay came from this ONE rule, on
+# test fixtures and example payloads (core_app alone: 538). Every other default
+# rule is kept — private-key, jwt, stripe, the cloud-provider families — and
+# they contributed 12 hits total across 72 repos in 3 months.
+#
+# Losing it costs the "second net for keyword-adjacent shapes" that
+# .betterleaks.toml's comment describes. gitops-production keeps that net because
+# it has a baseline to absorb the noise; the fleet has none and would need 72.
+#
+# ── delta 2: generated / vendored artefacts are excluded ────────────────────
+# 449 shape-rule hits came from committed build output and rendered HTML —
+# nonagentic_homepage 448, plus dist/ trees elsewhere. A 43-char base64url
+# substring in minified JS or a lockfile hash is not a credential, and no human
+# reviews those files.
+#
+# ── delta 3: mermaid element ids ────────────────────────────────────────────
+# Mermaid renders ids like `mermaid-1780123456789_flowchart-v2-…`: exactly 43
+# chars, entropy above the floor, and they appear in committed HTML. 74 of the
+# 74 findings remaining on nonagentic_homepage after delta 2. Zero of them are
+# secrets.
+#
+# ⚠️ When you add an exclusion here you are blinding 72 repos. Measure the
+# false-positive population first and write the number down, as above.
+
+title = "nonagentic fleet betterleaks config"
+
+[extend]
+useDefault = true
+# Two betterleaks defaults are not in gitleaks' defaults and fire on ordinary
+# local dev DSNs and `PASSWORD:` placeholders instead of credentials. Measured
+# on this repo at the 2026-11-13 swap: 605 findings (600 generic-credential-uri,
+# 5 generic-password), 0 of them real. Disabled by owner decision so the swap
+# does not change what this gate catches. See the fleet config for the full
+# measurement.
+# See delta 1. Verified honoured on 8.30.1: with this set, generic-api-key
+# findings went to zero while private-key / jwt / stripe / curl-auth-user still
+# fired in the same replay — so the rule is disabled, not the whole ruleset.
+disabledRules = ["generic-api-key", "generic-credential-uri", "generic-password"]
+
+# ============================================================================
+# Custom rules — MUST stay identical to gitops-production/.betterleaks.toml.
+# tests/test-secret-scan-gate.py compares them field by field and fails on any
+# divergence, so a rule tightened in one file cannot silently rot in the other.
+# ============================================================================
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key (sk-ant-api03-…)"
+regex = '''sk-ant-api03-[A-Za-z0-9_-]{93,}'''
+keywords = ["sk-ant-api03"]
+
+[[rules]]
+id = "groq-api-key"
+description = "Groq API key (gsk_…)"
+regex = '''gsk_[A-Za-z0-9]{52,}'''
+keywords = ["gsk_"]
+
+[[rules]]
+id = "deepseek-api-key"
+description = "DeepSeek API key (sk-<32-hex>)"
+regex = '''sk-[a-f0-9]{32}\b'''
+keywords = ["sk-"]
+
+[[rules]]
+id = "github-pat-classic"
+description = "GitHub PAT (ghp_/gho_/ghu_/ghs_/ghr_)"
+regex = '''gh[pousr]_[A-Za-z0-9]{36,}'''
+keywords = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"]
+
+[[rules]]
+id = "github-pat-fine-grained"
+description = "GitHub fine-grained PAT (github_pat_…)"
+regex = '''github_pat_[A-Za-z0-9_]{40,}'''
+keywords = ["github_pat_"]
+
+[[rules]]
+id = "kc-bearer-jwt"
+description = "Hardcoded Bearer JWT (3-segment)"
+regex = '''eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{30,}'''
+keywords = ["eyJ"]
+
+[[rules]]
+id = "keycloak-client-secret-32"
+description = "32-char Keycloak client_secret-shaped value"
+regex = '''(?i)(client[_-]?secret|secret)\s*[:=]\s*["']?([A-Za-z0-9]{32})["']?'''
+keywords = ["client_secret", "client-secret", "clientSecret"]
+
+[[rules]]
+id = "nonagentic-licenses-token"
+description = "Nonagentic licences service token (secrets.token_urlsafe(32) = 43 chars base64url)"
+# SHAPE-BASED, DELIBERATELY CONTEXT-FREE — the whole reason this rule exists.
+# Every other rule here, and every detect-secrets detector on the Python repos,
+# only matches `KEYWORD <assign> "literal"`. A credential passed as an ARGUMENT
+# is invisible to all of them. Full derivation, the 200k-sample entropy
+# measurement behind 4.35, and the accepted residual misses are documented in
+# gitops-production/.betterleaks.toml — read that before changing anything here.
+regex = '''(?:^|[^A-Za-z0-9_/+=-])([A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_/+=-]|$)'''
+secretGroup = 1
+entropy = 4.35
+
+# ============================================================================
+# Allowlist
+# ============================================================================
+
+[[allowlists]]
+description = "Generated artefacts and known non-secret shapes, fleet-wide."
+
+paths = [
+  # The baseline stores the secrets it recorded, so scanning it re-finds every
+  # value it exists to suppress. Structural self-reference, not a leak.
+  '''\.betterleaks\.baseline\.json$''',
+  '''\.gitleaks\.baseline\.json$''',
+  # Sibling agent worktrees are full copies of the tree.
+  '''^\.worktrees/''',
+  # delta 2 — generated / vendored trees. Nobody reviews these files, and a
+  # 43-char base64url substring in them is a hash or an id, not a credential.
+  '''(^|/)(dist|build|out|coverage|node_modules|vendor|__snapshots__|\.next|\.svelte-kit|generated)/''',
+  # Lockfiles: dense with base64 and sha hashes by construction.
+  '''(^|/)(package-lock\.json|bun\.lock|yarn\.lock|pnpm-lock\.yaml|uv\.lock|poetry\.lock|Cargo\.lock|go\.sum)$''',
+  # Minified / binary / asset files. betterleaks emits no useful line context for
+  # them and every hit measured was a hash.
+  '''\.(min\.js|min\.css|map|svg|png|jpg|jpeg|gif|ico|woff2?|ttf|pdf)$''',
+]
+
+regexTarget = "match"
+regexes = [
+  '''ci_test_password_secure''',
+  '''test-jwt-secret-key-for-ci-testing-only-32chars''',
+  '''REPLACE_ME_WITH_STRONG_PASSWORD''',
+  # ⛔ REMOVED 2026-09-06 — this slot used to hold a bare `placeholder` entry.
+  # `regexTarget = "match"` makes each entry an UNANCHORED SUBSTRING test against
+  # the matched text, so it suppressed ANY finding merely containing the word —
+  # an unbounded bypass. `generic-api-key` captures a `[\w.-]{0,50}?` prefix, so
+  # the variable NAME is inside the match: measured on a fixture, one identical
+  # high-entropy value was DETECTED as `db_password:` and SUPPRESSED as
+  # `placeholder_db_password:`. Kept in lockstep with .betterleaks.toml, which
+  # measured a delta of ZERO on removal. A real placeholder gets a path entry or
+  # its own exact literal — never a bare English word.
+  '''<REDACTED-''',
+  # The coding OpenAPI spec's synthetic GitHub-PAT doc example. It is the value
+  # of `json_schema_extra={"example": ...}` on the `access_token` field of the
+  # container/workspace models in coding-{containers,analysis,testing,client},
+  # so it is emitted into every /openapi.json and therefore into every orval-
+  # generated client's committed `docs/openapi.json`.
+  #
+  # Measured: 16 hits = 8 strings double-counted by `github-pat` and
+  # `github-pat-classic`; ONE distinct value, 16 distinct characters across a
+  # 37-char body. A real PAT has ~30+. The reusable n8n-node workflow already
+  # investigated and documented this exact value.
+  #
+  # Why a VALUE allowlist and not a path allowlist: `docs/openapi.json` is a
+  # 1 MB generated artifact that would then be blind to a genuine leak forever.
+  # The gate is a RANGE scan, so it never fired until a PR regenerated the spec
+  # — and because the spec is minified onto ONE line, every future regeneration
+  # re-adds it. Left unallowlisted this fails every regeneration from now on.
+  #
+  # ⚠️ This is a SUPPRESSION, not a fix. The real fix is to stop shipping a
+  # PAT-shaped literal from the backend models; until those four services
+  # redeploy, every downstream spec still carries it.
+  # NB the regex must match what betterleaks CAPTURES, not the literal in the file:
+  # `github-pat` captures `ghp_` + exactly 36 chars, so the finding is the
+  # 40-char TRUNCATION of this 44-char example. Allowlisting the full literal
+  # silently does nothing — measured against a fixture before shipping.
+  '''ghp_1234567890abcdef1234567890abcdef''',
+  # Public w2v service-account subject UUID (AUTH_DELEGATING_SUBJECTS). Already
+  # plaintext across the w2v configmaps; not a secret.
+  '''8382f0b3-c082-4f97-8d47-120ce5a18e05''',
+  '''01a0dd02-d324-77bb-acd8-7c31fb6e95ec''',
+  # delta 3 — mermaid element ids. See the header for the measurement.
+  '''mermaid-[0-9]{10,}''',
+  # delta 4 — dated handoff/status FILENAMES cited in prose. Measured
+  # 2026-08-18 in `commonpractice`: `HANDOFF-2026-07-30-offboarding-never-worked`
+  # is exactly 43 chars and scores entropy 4.3907, so it clears the 4.35 floor
+  # and trips nonagentic-licenses-token. It is not a credential — it is the
+  # basename stem of a real 40 KB document in the same repo, cited in backticks
+  # and immediately followed by `.md` in all three hits. Its SHA-256 is absent
+  # from the licences `token` table (checked against 209 rows, so the 0 is
+  # meaningful, not an empty-table artifact).
+  #
+  # ⚠️ The 4.35 floor's "zero false positives" claim was calibrated on
+  # gitops-production ALONE, where the dated-filename ceiling measured 4.275.
+  # This is the first observed member of that predicted class exceeding it on
+  # another repo. Expect more as the fleet config reaches more repos; the fix
+  # is a targeted allowlist entry like this one, NOT raising the floor —
+  # 4.50 would miss 1 real token in 231 versus 1 in 5,263 at 4.35.
+  #
+  # Deliberately NOT path-allowlisting *.md: handoff and incident docs are
+  # exactly where a human is most likely to paste a real token while writing
+  # up an outage. Do not blind the scanner to markdown.
+  '''HANDOFF-[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+''',
+]
+
+# Repo-specific: the n8n derivation fixtures carry a node/process key whose *name* is
+# `key` and whose value starts with `s13.` (a process key such as `s13.stage.…`). It
+# names a step in `fixtures/*.flow.json` and is asserted by the workflow tests. The
+# fleet config disables generic-api-key; this allowlist keeps the exclusion explicit
+# so a future rule change cannot silently re-flag the fixture.
+[[allowlists]]
+description = "n8n flow fixtures: 'key' is a process key with an s13. prefix, not a credential"
+paths = ['''^fixtures/[abc]\.flow\.json$''']
+regexes = ['''"key"\s*:\s*"s13\.[^"]*"''']

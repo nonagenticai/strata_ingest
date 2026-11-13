@@ -1,0 +1,11 @@
+{
+  "task": "transcribe",
+  "language": "english",
+  "duration": 12.3,
+  "text": "Welcome to the quarterly review. Revenue grew twelve percent.",
+  "segments": [
+    { "id": 0, "seek": 0, "start": 0.0, "end": 4.2, "text": " Welcome to the quarterly review.", "tokens": [50364, 5672, 281], "temperature": 0.0, "avg_logprob": -0.21, "compression_ratio": 1.1, "no_speech_prob": 0.01 },
+    { "id": 1, "seek": 0, "start": 4.2, "end": 12.3, "text": " Revenue grew twelve percent.", "tokens": [50574, 47941, 6109], "temperature": 0.0, "avg_logprob": -0.18, "compression_ratio": 1.1, "no_speech_prob": 0.02 }
+  ],
+  "usage": { "type": "duration", "seconds": 12.3 }
+}
