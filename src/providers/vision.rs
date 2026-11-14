@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 use super::{Body, Capability, Http, ProviderError, ProviderHealth, Usage, UsageUnit, data_url};
 use crate::config::ProviderCfg;
@@ -72,11 +73,27 @@ impl VisionClient {
         image: &[u8],
         mime: &str,
     ) -> Result<(String, Usage), ProviderError> {
-        let r = self.call(image, mime).await;
+        self.caption_for(None, image, mime).await
+    }
+
+    /// [`Self::caption`] for a tenant's step: the call carries `X-Effective-Tenant-Id` (see
+    /// [`super::EFFECTIVE_TENANT_HEADER`]).
+    pub async fn caption_for(
+        &self,
+        effective_tenant: Option<Uuid>,
+        image: &[u8],
+        mime: &str,
+    ) -> Result<(String, Usage), ProviderError> {
+        let r = self.call(effective_tenant, image, mime).await;
         self.http.record(r)
     }
 
-    async fn call(&self, image: &[u8], mime: &str) -> Result<(String, Usage), ProviderError> {
+    async fn call(
+        &self,
+        effective_tenant: Option<Uuid>,
+        image: &[u8],
+        mime: &str,
+    ) -> Result<(String, Usage), ProviderError> {
         let body = json!({
             "model": self.http.model(),
             "messages": [{
@@ -91,7 +108,7 @@ impl VisionClient {
         let bytes = serde_json::to_vec(&body).expect("a json! value always serializes");
         let resp: ChatResponse = self
             .http
-            .post("/chat/completions", Body::Json(bytes))
+            .post("/chat/completions", Body::Json(bytes), effective_tenant)
             .await?;
         let text = resp
             .choices

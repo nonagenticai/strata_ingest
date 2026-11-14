@@ -8,6 +8,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use reqwest::multipart::{Form, Part};
 use serde::Deserialize;
+use uuid::Uuid;
 
 use super::{Body, Capability, Http, ProviderError, ProviderHealth, Usage, UsageUnit};
 use crate::config::ProviderCfg;
@@ -106,12 +107,26 @@ impl TranscribeClient {
         filename: &str,
         language: Option<&str>,
     ) -> Result<Transcript, ProviderError> {
-        let r = self.call(audio, filename, language).await;
+        self.transcribe_for(None, audio, filename, language).await
+    }
+
+    /// [`Self::transcribe`] for a tenant's step: the call carries `X-Effective-Tenant-Id` (see
+    /// [`super::EFFECTIVE_TENANT_HEADER`]) — this is the call that decides which tenant the
+    /// receiving service's usage event names.
+    pub async fn transcribe_for(
+        &self,
+        effective_tenant: Option<Uuid>,
+        audio: Bytes,
+        filename: &str,
+        language: Option<&str>,
+    ) -> Result<Transcript, ProviderError> {
+        let r = self.call(effective_tenant, audio, filename, language).await;
         self.http.record(r)
     }
 
     async fn call(
         &self,
+        effective_tenant: Option<Uuid>,
         audio: Bytes,
         filename: &str,
         language: Option<&str>,
@@ -131,7 +146,11 @@ impl TranscribeClient {
         }
         let resp: VerboseResponse = self
             .http
-            .post("/audio/transcriptions", Body::Multipart(form))
+            .post(
+                "/audio/transcriptions",
+                Body::Multipart(form),
+                effective_tenant,
+            )
             .await?;
         let mut prev_end = 0.0_f64;
         let mut segments = Vec::with_capacity(resp.segments.len());

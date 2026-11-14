@@ -473,6 +473,15 @@ Image: `Dockerfile` (debian 12-slim, uid 65532, ffmpeg 5.1, read-only root; only
 Plan `docs/superpowers/plans/2026-10-16-strata-ingest.md` · spec strata_rag `docs/ingestion-providers-spec` @ `fa541eb`
 (`docs/superpowers/specs/2026-10-16-ingestion-and-providers-design.md`) · contracts provider_contracts `CONTRACTS.md`.
 
+## Licensing
+
+The code in this repository is Apache-2.0 and needs no licence key to build, test or run.
+Licence-token authentication is **optional**: it is off while
+`STRATA_INGEST_LICENSE_INTROSPECT_URL` is unset or empty, and static API tokens keep working.
+With the URL set, licence tokens are introspected against the licences service.
+
+The licensing stack is public too — [`licenses`](https://github.com/nonagenticai/licenses) (entitlements, plans and tokens) and [`license-authz`](https://github.com/nonagenticai/license-authz) (the Envoy `ext_authz` enforcement point). Neither is required to run this code.
+
 ## License
 
 Apache 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

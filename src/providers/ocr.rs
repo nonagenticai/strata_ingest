@@ -9,6 +9,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 use super::{Body, Capability, Http, ProviderError, ProviderHealth, Usage, UsageUnit, data_url};
 use crate::config::ProviderCfg;
@@ -83,11 +84,25 @@ impl OcrClient {
     }
 
     pub async fn ocr(&self, input: OcrInput) -> Result<OcrPages, ProviderError> {
-        let r = self.call(&input).await;
+        self.ocr_for(None, input).await
+    }
+
+    /// [`Self::ocr`] for a tenant's step: the call carries `X-Effective-Tenant-Id` (see
+    /// [`super::EFFECTIVE_TENANT_HEADER`]).
+    pub async fn ocr_for(
+        &self,
+        effective_tenant: Option<Uuid>,
+        input: OcrInput,
+    ) -> Result<OcrPages, ProviderError> {
+        let r = self.call(effective_tenant, &input).await;
         self.http.record(r)
     }
 
-    async fn call(&self, input: &OcrInput) -> Result<OcrPages, ProviderError> {
+    async fn call(
+        &self,
+        effective_tenant: Option<Uuid>,
+        input: &OcrInput,
+    ) -> Result<OcrPages, ProviderError> {
         let url = data_url(&input.mime, &input.bytes);
         let document = if input.mime.starts_with("image/") {
             json!({"type": "image_url", "image_url": url})
@@ -103,7 +118,10 @@ impl OcrClient {
             body["pages"] = json!(pages);
         }
         let bytes = serde_json::to_vec(&body).expect("a json! value always serializes");
-        let resp: OcrResponse = self.http.post("/ocr", Body::Json(bytes)).await?;
+        let resp: OcrResponse = self
+            .http
+            .post("/ocr", Body::Json(bytes), effective_tenant)
+            .await?;
 
         let mut pages: Vec<OcrPage> = resp
             .pages
