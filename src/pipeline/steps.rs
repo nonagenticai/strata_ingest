@@ -1062,11 +1062,14 @@ async fn ocr_with_provider(
         let (_permit, client) = pcfg.client.acquire().await;
         let t0 = Instant::now();
         let r = client
-            .ocr(OcrInput {
-                bytes,
-                mime: input.mime.clone(),
-                pages,
-            })
+            .ocr_for(
+                Some(step.tenant),
+                OcrInput {
+                    bytes,
+                    mime: input.mime.clone(),
+                    pages,
+                },
+            )
             .await?;
         (r, t0.elapsed())
     };
@@ -1280,7 +1283,7 @@ async fn caption(ctx: &Ctx, step: &ClaimedStep) -> StepResult {
     let (called, latency) = {
         let (_permit, client) = pcfg.client.acquire().await;
         let t0 = Instant::now();
-        let r = client.caption(&bytes, &mime).await;
+        let r = client.caption_for(Some(step.tenant), &bytes, &mime).await;
         (r, t0.elapsed())
     };
     let (text, usage) = match called {
@@ -1405,7 +1408,7 @@ async fn transcribe_segment(ctx: &Ctx, step: &ClaimedStep) -> StepResult {
         let (_permit, client) = pcfg.client.acquire().await;
         let t0 = Instant::now();
         let r = client
-            .transcribe(bytes, filename, language.as_deref())
+            .transcribe_for(Some(step.tenant), bytes, filename, language.as_deref())
             .await?;
         (r, t0.elapsed())
     };

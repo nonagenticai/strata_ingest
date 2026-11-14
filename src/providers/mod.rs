@@ -25,9 +25,19 @@ use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, SemaphorePermit};
+use uuid::Uuid;
 
 use crate::config::{ProviderCfg, Secret, redact_url};
 use crate::error::{IngestError, StepError};
+
+/// The tenant a provider call is for, when it differs from the credential's own tenant.
+///
+/// Sent on every provider call that belongs to a step, and honoured only where the receiver
+/// allowlists this credential's subject — today that is `asr_backend`'s delegation
+/// (`AUTH_DELEGATING_SUBJECTS`), where it decides the tenant its `cost_usd = 0` usage event names.
+/// `mlx_api`, `mlx-inference` and any commercial provider ignore an unknown header, so this is
+/// inert everywhere else.
+pub(crate) const EFFECTIVE_TENANT_HEADER: &str = "x-effective-tenant-id";
 
 /// How a failed provider/step call is treated by the queue: only `Retryable` is retried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -404,15 +414,25 @@ impl Http {
     }
 
     /// POSTs `body` to `{base_url}{path}` once and decodes the 2xx JSON response as `T`.
+    ///
+    /// `effective_tenant` is the tenant the work is FOR, not the credential's own tenant: it goes
+    /// out as `X-Effective-Tenant-Id`, which a receiver honours only when this credential's
+    /// subject is on its delegation allowlist (e.g. `asr_backend` `src/auth.rs`). There it decides
+    /// which tenant the receiver's usage event names; every other host ignores the header, so a
+    /// receiver that does not delegate is unaffected.
     pub(crate) async fn post<T: DeserializeOwned>(
         &self,
         path: &str,
         body: Body,
+        effective_tenant: Option<Uuid>,
     ) -> Result<T, ProviderError> {
-        let req = self
+        let mut req = self
             .http
             .post(format!("{}{path}", self.base_url))
             .header(AUTHORIZATION, self.auth.clone());
+        if let Some(tenant) = effective_tenant {
+            req = req.header(EFFECTIVE_TENANT_HEADER, tenant.to_string());
+        }
         let req = match body {
             Body::Json(bytes) => req
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
