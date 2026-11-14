@@ -243,6 +243,16 @@ fn remove_container(name: &str) {
         .output();
 }
 
+/// The `pcontract fake` provider (provider_contracts CONTRACTS.md, "Fake provider behaviour").
+///
+/// The image lives in an estate registry, so this public tree names no registry and pins no tag:
+/// point `PCONTRACT_FAKE_URL` at a fake that is already running, or set `PCONTRACT_FAKE_IMAGE`
+/// (`name:tag`) and one is started for the test binary. Neither set = the provider-backed tests
+/// are `#[ignore]`d and this panics if something asks for the fake anyway.
+///
+/// The fake's default API key (`PCONTRACT_FAKE_API_KEY`) is [`FAKE_KEY`].
+pub const FAKE_KEY: &str = "fake-key";
+
 // ---------------------------------------------------------------------------------------------
 // storage_service
 
@@ -639,7 +649,10 @@ async fn fs_delete(
 
 /// Rulings R9: the CPU image, started as `docling-serve run --host 0.0.0.0 --port P`
 /// (`DOCLING_SERVE_PORT` is ignored). Multi-arch, several GB: pulled once.
-const DOCLING_IMAGE: &str = "docling-project/docling-serve-cpu:v1.37.0";
+// Docling publishes this image on quay.io/ghcr.io, NOT Docker Hub: the bare
+// `docling-project/docling-serve-cpu` is denied with "repository does not exist", which reads
+// like a rate limit or a missing login and cost a debugging cycle on 2026-11-14.
+const DOCLING_IMAGE: &str = "quay.io/docling-project/docling-serve-cpu:v1.37.0";
 
 static DOCLING: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 
@@ -746,4 +759,80 @@ async fn wait_http_healthy(url: &str, within: std::time::Duration) -> Result<(),
         "{url} not healthy within {} s: {last}",
         within.as_secs()
     ))
+}
+
+static SHARED_FAKE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+
+/// The base URL (`http://host:port`, no `/v1`) of a `pcontract fake` shared by every test of this
+/// binary: `PCONTRACT_FAKE_URL` when set, else one container started on first use and removed by
+/// a watchdog once this process exits (see [`docling_url`]). The fake is stateless, so one
+/// container serves every test.
+pub async fn shared_fake_url() -> String {
+    SHARED_FAKE
+        .get_or_init(|| async {
+            if let Ok(url) = std::env::var("PCONTRACT_FAKE_URL")
+                && !url.trim().is_empty()
+            {
+                let url = url.trim().trim_end_matches('/').to_string();
+                wait_http_healthy(&url, std::time::Duration::from_secs(60))
+                    .await
+                    .expect("PCONTRACT_FAKE_URL is not healthy");
+                return url;
+            }
+            let image = std::env::var("PCONTRACT_FAKE_IMAGE")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no pcontract fake configured: set PCONTRACT_FAKE_URL to a running one, \
+                         or PCONTRACT_FAKE_IMAGE=name:tag to start one"
+                    )
+                });
+            let mut failures = Vec::new();
+            for attempt in 1..=START_ATTEMPTS {
+                let port = free_port();
+                let name = format!("strata-ingest-pcfake-{}", uuid::Uuid::now_v7());
+                let out = std::process::Command::new("docker")
+                    .args([
+                        "run",
+                        "-d",
+                        "--rm",
+                        "--platform",
+                        "linux/amd64",
+                        "--name",
+                        &name,
+                        "-p",
+                        &format!("127.0.0.1:{port}:{port}"),
+                        &image,
+                        "fake",
+                        "--port",
+                        &port.to_string(),
+                    ])
+                    .output()
+                    .expect("run docker");
+                if !out.status.success() {
+                    let e = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    eprintln!(
+                        "pcontract fake on port {port} failed (attempt {attempt}/{START_ATTEMPTS}): {e}"
+                    );
+                    failures.push(format!("port {port}: {e}"));
+                    remove_container(&name);
+                    continue;
+                }
+                remove_when_this_process_exits(&name);
+                let url = format!("http://127.0.0.1:{port}");
+                match wait_http_healthy(&url, std::time::Duration::from_secs(120)).await {
+                    Ok(()) => return url,
+                    Err(e) => {
+                        failures.push(format!("port {port}: {e}"));
+                        remove_container(&name);
+                    }
+                }
+            }
+            panic!(
+                "start pcontract fake (is Docker running?) failed {START_ATTEMPTS} times: {failures:?}"
+            );
+        })
+        .await
+        .clone()
 }
