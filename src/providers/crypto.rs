@@ -181,9 +181,14 @@ mod tests {
         Uuid::from_u128(n)
     }
 
+    /// A fresh 32-byte key from the OS RNG: no test carries key material in its source.
+    fn test_key() -> [u8; 32] {
+        <[u8; 32]>::generate()
+    }
+
     #[test]
     fn a_store_key_opens_only_for_its_store_and_never_as_a_tenant_key() {
-        let c = KeyCipher::new(&[7u8; 32]);
+        let c = KeyCipher::new(&test_key());
         let store = t(77);
         let s = c
             .seal_store(t(1), store, Capability::Ocr, &Secret::new("sk-store"))
@@ -213,7 +218,7 @@ mod tests {
 
     #[test]
     fn round_trip_with_a_fresh_nonce_per_write() {
-        let c = KeyCipher::new(&[7u8; 32]);
+        let c = KeyCipher::new(&test_key());
         let key = Secret::new("sk-round-trip-123");
         let a = c.seal(t(1), Capability::Ocr, &key).unwrap();
         let b = c.seal(t(1), Capability::Ocr, &key).unwrap();
@@ -230,7 +235,7 @@ mod tests {
 
     #[test]
     fn a_ciphertext_moved_to_another_tenant_or_capability_does_not_open() {
-        let c = KeyCipher::new(&[7u8; 32]);
+        let c = KeyCipher::new(&test_key());
         let s = c.seal(t(1), Capability::Ocr, &Secret::new("k")).unwrap();
         assert!(c.open(t(2), Capability::Ocr, &s).is_err());
         assert!(c.open(t(1), Capability::Vision, &s).is_err());
@@ -247,10 +252,10 @@ mod tests {
 
     #[test]
     fn a_wrong_key_does_not_open_and_the_error_holds_no_secret() {
-        let s = KeyCipher::new(&[7u8; 32])
+        let s = KeyCipher::new(&test_key())
             .seal(t(1), Capability::Vision, &Secret::new("sk-wrong-key-456"))
             .unwrap();
-        let err = KeyCipher::new(&[8u8; 32])
+        let err = KeyCipher::new(&test_key())
             .open(t(1), Capability::Vision, &s)
             .unwrap_err()
             .to_string();
@@ -274,7 +279,7 @@ mod tests {
 
     #[test]
     fn debug_prints_no_key_material() {
-        let c = KeyCipher::new(&[9u8; 32]);
+        let c = KeyCipher::new(&test_key());
         assert_eq!(format!("{c:?}"), "KeyCipher(***)");
         let s = c.seal(t(1), Capability::Ocr, &Secret::new("k")).unwrap();
         assert!(!format!("{s:?}").contains("nonce: ["), "{s:?}");
