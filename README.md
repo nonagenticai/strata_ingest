@@ -460,6 +460,14 @@ licence token `STRATA_INGEST_STORAGE_TOKEN` is sent as `X-Tenant-Id: Bearer <tok
 `cargo test --locked`; CI runs the same script and falls back to cargo).
 Image: `Dockerfile` (debian 12-slim, uid 65532, ffmpeg 5.1, read-only root; only `/tmp` writable).
 
+`tests/e2e.rs` is the end-to-end suite: the real worker pool, a real Postgres, a real
+docling-serve (started from quay.io by the harness) and the whole corpus in `tests/fixtures/corpus`,
+driven from Acquire to Deliver. Five of its tests exercise the provider path and are `#[ignore]`d by
+default, because they need a `pcontract fake`, which lives in a private registry and is therefore
+not named here: point `PCONTRACT_FAKE_URL` at a fake that is already running, or set
+`PCONTRACT_FAKE_IMAGE=name:tag` and the harness starts one — then
+`cargo test --test e2e -- --ignored`.
+
 ## Known limitations
 - CPU OCR (docling easyocr) is best-effort: ~25–45% recall on JPEG scans. Configure an `ocr` provider for scans.
 - HTML/EPUB uploads: figures are not exported by docling, so they are not captioned (URL jobs get their page images
