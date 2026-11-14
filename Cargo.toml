@@ -54,7 +54,7 @@ tokio-util = "0.7.20"
 # Scratch files: ffmpeg dirs (audio/video Convert), upload spool (API), zip download (Detect).
 tempfile = "3.27.0"
 infer = { version = "0.22.0", default-features = false }
-zip = { version = "=9.0.4", default-features = false, features = ["deflate"] }
+zip = { version = "=9.5.1", default-features = false, features = ["deflate"] }
 # api / datatable sources (src/sources): CSV rows, XLSX sheets (zip + quick-xml; calamine needs
 # zip ^8.6, whose releases are all yanked).
 csv = "1.4.0"
