@@ -141,6 +141,20 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
+      # The audio tests need real ffmpeg/ffprobe. `scripts/ci-test.sh` puts them on PATH
+      # locally from this public image; the workflow must do the same or they fail with
+      # `ffmpeg_unavailable` (measured on the first public run).
+      - name: ffmpeg + ffprobe from the public static image
+        run: |
+          set -euo pipefail
+          docker create --name ci-ffmpeg mwader/static-ffmpeg:7.1.1 >/dev/null
+          bin_dir="$RUNNER_TEMP/ffmpeg-bin"; mkdir -p "$bin_dir"
+          docker cp ci-ffmpeg:/ffmpeg "$bin_dir/ffmpeg"
+          docker cp ci-ffmpeg:/ffprobe "$bin_dir/ffprobe"
+          docker rm ci-ffmpeg >/dev/null
+          chmod +x "$bin_dir/ffmpeg" "$bin_dir/ffprobe"
+          echo "$bin_dir" >> "$GITHUB_PATH"
+
       - name: cargo nextest (0.9.150 pinned, sha256-verified)
         run: |
           set -euo pipefail
