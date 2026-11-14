@@ -519,3 +519,39 @@ async fn health_records_last_success_and_error_class() {
         "no URLs in health: {v}"
     );
 }
+
+/// A step's provider call names the tenant the work is FOR (`X-Effective-Tenant-Id`), and a
+/// probe names none: the probe is not a tenant's use (spec §7), and a receiver that honours
+/// delegation (`asr_backend`) would otherwise attribute it to whoever happened to run it.
+#[tokio::test]
+async fn a_step_call_carries_the_effective_tenant_and_a_probe_does_not() {
+    let tenant = uuid::Uuid::parse_str("0195f48b-d000-7000-8000-000000000099").unwrap();
+    let (base, cap) = capture_mock(
+        "/v1/audio/transcriptions",
+        StatusCode::OK,
+        fixture("openai_transcribe_verbose.json"),
+    )
+    .await;
+    let t = TranscribeClient::new(&cfg(&base, "openai", "m", "k"), health()).unwrap();
+
+    t.transcribe_for(Some(tenant), wav(1), "a.wav", None)
+        .await
+        .expect("step call");
+    t.transcribe(wav(1), "a.wav", None)
+        .await
+        .expect("probe call");
+
+    let bodies = cap.bodies.lock().await;
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(
+        bodies[0]
+            .0
+            .get("x-effective-tenant-id")
+            .and_then(|v| v.to_str().ok()),
+        Some("0195f48b-d000-7000-8000-000000000099")
+    );
+    assert!(
+        bodies[1].0.get("x-effective-tenant-id").is_none(),
+        "a probe has no tenant to name"
+    );
+}
