@@ -111,8 +111,8 @@ impl TranscribeClient {
     }
 
     /// [`Self::transcribe`] for a tenant's step: the call carries `X-Effective-Tenant-Id` (see
-    /// [`super::EFFECTIVE_TENANT_HEADER`]) — this is the call that decides which tenant
-    /// `asr.internal`'s usage event names.
+    /// [`super::EFFECTIVE_TENANT_HEADER`]) — this is the call that decides which tenant the
+    /// receiving service's usage event names.
     pub async fn transcribe_for(
         &self,
         effective_tenant: Option<Uuid>,
