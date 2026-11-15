@@ -391,6 +391,7 @@ fn debug_redacts_secrets() {
         "scraper-token-SECRET",
         "ocr-key-SECRET",
     ] {
+        // Fixed fixtures, not credentials: the assertion is that Debug rendering redacts them.
         assert!(!dbg.contains(secret), "Debug leaks {secret}: {dbg}");
     }
     assert!(

@@ -1906,6 +1906,7 @@ async fn health_reports_provider_status() {
         "strata-token",
         "storage-licence-SECRET",
     ] {
+        // Fixed fixtures, not credentials: the assertion is that none appears in the /health body.
         assert!(!text.contains(secret), "{secret} leaked: {text}");
     }
 
