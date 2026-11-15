@@ -91,6 +91,8 @@ pub async fn run(cli: Cli) -> Result<ExitCode> {
                 })?;
             let pool = crate::db::connect(&url).await?;
             pool.close().await;
+            // redact_url masks the userinfo password and the password / sslpassword query
+            // parameters, so the printed endpoint carries no credential (see config.rs tests).
             println!("migrations applied to {}", redact_url(&url));
             Ok(ExitCode::SUCCESS)
         }
