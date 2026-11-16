@@ -5,7 +5,7 @@
 # Base images come ONLY from the internal mirror. Same shape as strata_rag: the mirror has no glibc
 # Rust image, so the builder is the mirrored debian:12-slim with a pinned toolchain from rustup,
 # and builder + runtime share one glibc (aws-lc-sys is a native cmake build).
-ARG RUST_TOOLCHAIN=1.99.1
+ARG RUST_TOOLCHAIN=1.100.0
 
 FROM debian:12-slim AS build
 ARG RUST_TOOLCHAIN
