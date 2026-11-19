@@ -215,3 +215,12 @@ jobs:
             docker push "$ref:$tag"
           done
           echo "pushed $ref:$sha $ref:$run $ref:latest"
+
+  # The coding gate: the app runs this repository's HEAD through its own plan (fmt, clippy,
+  # test) in a kata Pod, from one reusable workflow pinned to one coding commit. The licence
+  # token is an Actions secret; a fork PR never receives it, so the called job skips there.
+  gate:
+    uses: nonagenticai/coding/.github/workflows/gate.yml@ee24e1b774fd177c5911c33194093c488ec08836
+    with:
+      client_ref: ee24e1b774fd177c5911c33194093c488ec08836
+    secrets: inherit
