@@ -216,11 +216,17 @@ jobs:
           done
           echo "pushed $ref:$sha $ref:$run $ref:latest"
 
-  # The coding gate: the app runs this repository's HEAD through its own plan (fmt, clippy,
-  # test) in a kata Pod, from one reusable workflow pinned to one coding commit. The licence
+  # The coding gate: the app runs this repository's HEAD through its own lint plan (fmt,
+  # clippy) in a kata Pod, from one reusable workflow pinned to one coding commit. The licence
   # token is an Actions secret; a fork PR never receives it, so the called job skips there.
+  #
+  # `kind: lint`, not `check`: measured 2026-11-20, the e2e suite shells out to `docker`
+  # (tests/common/mod.rs:698, `run docker`), which the kata Pod does not provide — 4 e2e tests
+  # panicked on a missing binary while every unit suite passed. The lint half is the verdict the
+  # Pod can actually give; the full suite stays in this repository's own rust job.
   gate:
     uses: nonagenticai/coding/.github/workflows/gate.yml@ee24e1b774fd177c5911c33194093c488ec08836
     with:
       client_ref: ee24e1b774fd177c5911c33194093c488ec08836
+      kind: lint
     secrets: inherit
