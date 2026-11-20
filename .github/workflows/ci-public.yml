@@ -98,15 +98,26 @@ jobs:
           rustup show
           rustc --version
 
-      - uses: actions/cache@v6
+      # `Swatinem/rust-cache`, not `actions/cache`: it prunes to its own budget and caches the
+      # DEPENDENCY graph without the workspace's own crates, which is where a cold Rust job
+      # spends most of its minutes. `env-vars` folds CARGO_PROFILE_DEV_DEBUG (0, above) into the
+      # key so a profile change cannot silently reuse a target built the other way.
+      #
+      # `save-if` is main-only: a PR run restores the cache the last `main` run saved and can
+      # never write or evict it. Same settings + same `shared-key` as the reusable
+      # `rust-preflight.yml`, which is what lets `.github/workflows/preflight.yml` restore THIS
+      # cache on a lane branch instead of paying a cold compile.
+      #
+      # ⛔ `shared-key: checks` is a contract with preflight.yml (`cache_shared_key`). Change it
+      #    in both files or the preflight silently falls back to a cold dependency compile.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          # Registry only: target/ is multi-gigabyte and would thrash the 10 GB cache budget.
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          prefix-key: v1-rust
+          shared-key: checks
+          cache-all-crates: "false"
+          cache-on-failure: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          env-vars: CARGO_PROFILE_DEV_DEBUG
 
       # ⛔ Both storage choices below are load-bearing and they are different resources.
       #   --shm-size: Docker's default /dev/shm is 64 MB and Postgres parallel workers
