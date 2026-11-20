@@ -1,0 +1,37 @@
+# Compile gate for lane branches. The local compiler is retired (no rbuild, no m1 slot), so
+# "does this compile?" is answered by a free GitHub-hosted runner before a PR exists.
+#
+# The reusable workflow is `workflow_call` only, so this file supplies the triggers. It runs
+# `cargo fmt --check` and `cargo clippy --all-targets --locked -D warnings` — the two steps a
+# Rust PR fails on first, and `--all-targets` compiles the test/bench targets too.
+#
+# ⛔ A push-triggered preflight is NOT the lane rule's "never push to see what CI says": that rule
+#    forbids using the PR as a compiler. This fires on the branch a session must push anyway (the
+#    claim), is superseded by its own successor, and writes NO required status — it cannot gate a
+#    merge. The required checks live in `ci-public.yml` alone.
+#
+# `cache_shared_key` is load-bearing: it must equal the `shared-key` the PR compile job (`checks`
+# in ci-public.yml) uses, or this job pays a cold dependency compile on every lane push. The
+# preflight never saves (rust-cache is main-only there), so it cannot evict the cache it borrows.
+name: preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['issue/**', 'lane/**', 'slice/**']
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    # Same gate as every job in ci-public.yml: a private repo cannot start an ubuntu-latest job
+    # on this org's failed Actions billing, and the gate fails closed to "skipped", never red.
+    if: ${{ !github.event.repository.private }}
+    uses: nonagenticai/ci-workflows/.github/workflows/rust-preflight.yml@d2ae87a417b00013838ba18841cdd1642b83fb89
+    with:
+      cache_shared_key: checks
