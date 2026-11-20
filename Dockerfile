@@ -3,11 +3,11 @@
 # providers from providers.toml.
 #
 # Base images come ONLY from the internal mirror. Same shape as strata_rag: the mirror has no glibc
-# Rust image, so the builder is the mirrored debian:12-slim with a pinned toolchain from rustup,
+# Rust image, so the builder is the mirrored debian:13-slim with a pinned toolchain from rustup,
 # and builder + runtime share one glibc (aws-lc-sys is a native cmake build).
 ARG RUST_TOOLCHAIN=1.100.0
 
-FROM debian:12-slim AS build
+FROM debian:13-slim AS build
 ARG RUST_TOOLCHAIN
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # hadolint ignore=DL3008
@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked \
     && install -D -m 0755 target/release/strata-ingest /out/strata-ingest
 
-FROM debian:12-slim AS runtime
+FROM debian:13-slim AS runtime
 # ffmpeg (5.1, with ffprobe): audio/video probing and segmenting; it is run with
 # -protocol_whitelist / -format_whitelist. ca-certificates: https providers. curl: the HEALTHCHECK.
 # hadolint ignore=DL3008
