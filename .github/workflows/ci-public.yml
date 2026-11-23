@@ -236,7 +236,7 @@ jobs:
   # panicked on a missing binary while every unit suite passed. The lint half is the verdict the
   # Pod can actually give; the full suite stays in this repository's own rust job.
   gate:
-    uses: nonagenticai/coding/.github/workflows/gate.yml@ee24e1b774fd177c5911c33194093c488ec08836
+    uses: nonagenticai/coding/.github/workflows/gate.yml@d4b6996b72af374e989847cf21f58e8384db7943
     with:
       client_ref: ee24e1b774fd177c5911c33194093c488ec08836
       kind: lint
