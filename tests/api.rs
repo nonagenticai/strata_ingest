@@ -1259,6 +1259,186 @@ async fn list_pages_with_a_before_cursor() {
     }
 }
 
+/// Creates one upload job for `token` whose filename is `name`, and returns its id.
+async fn named_job(e: &Env, token: &str, name: &str) -> Uuid {
+    let (s, v) = e
+        .upload(token, form(leaf(), &[(name, b"searchable body".to_vec())]))
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    job_id(&v["jobs"][0])
+}
+
+/// One `GET /api/ingest/jobs?<query>` page for `token`: its job ids and `next`.
+async fn list_page(e: &Env, query: &str, token: &str) -> (Vec<String>, Value) {
+    let (s, v) = e
+        .call(
+            reqwest::Method::GET,
+            &format!("/api/ingest/jobs?{query}"),
+            token,
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{query}: {v}");
+    let ids = v["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["id"].as_str().unwrap().to_string())
+        .collect();
+    (ids, v["next"].clone())
+}
+
+/// `q` searches the generated `search_text` (filename, URL, title and job id): case-insensitive,
+/// whitespace-split tokens ANDed, `%` / `_` stripped so they are never LIKE wildcards.
+#[tokio::test]
+async fn list_q_searches_filename_and_job_id() {
+    let e = env().await;
+    let alpha = named_job(&e, TOKEN_A, "Alpha-Report.txt").await;
+    let beta = named_job(&e, TOKEN_A, "beta.txt").await;
+    let (ids, next) = list_page(&e, "q=ALPHA", TOKEN_A).await;
+    assert_eq!((ids, next), (vec![alpha.to_string()], Value::Null));
+    // The job id is searchable too.
+    let (ids, _) = list_page(&e, &format!("q={alpha}"), TOKEN_A).await;
+    assert_eq!(ids, vec![alpha.to_string()]);
+    // Every token must match: neither filename has both words.
+    let (ids, _) = list_page(&e, "q=alpha+beta", TOKEN_A).await;
+    assert_eq!(ids, Vec::<String>::new());
+    // A literal `%` is stripped, not a wildcard: it still matches the rest of the name.
+    let (ids, _) = list_page(&e, "q=alp%25ha", TOKEN_A).await;
+    assert_eq!(ids, vec![alpha.to_string()]);
+    // `%` alone leaves no token: no filter (all the tenant's jobs), still a 200.
+    let (ids, _) = list_page(&e, "q=%25", TOKEN_A).await;
+    assert_eq!(ids.len(), 2);
+    // q composes with the other filters.
+    e.call(
+        reqwest::Method::POST,
+        &format!("/api/ingest/jobs/{beta}/cancel"),
+        TOKEN_A,
+    )
+    .await;
+    let (ids, _) = list_page(&e, "q=beta&status=cancelled", TOKEN_A).await;
+    assert_eq!(ids, vec![beta.to_string()]);
+    let (ids, _) = list_page(&e, "q=beta&status=queued", TOKEN_A).await;
+    assert_eq!(ids, Vec::<String>::new());
+}
+
+/// `sort=created` orders by created_at (`asc` unless `dir=desc`), with offset paging via `o:<n>`.
+#[tokio::test]
+async fn list_sorts_by_created_with_offset_paging() {
+    let e = env().await;
+    let a = named_job(&e, TOKEN_A, "a.txt").await;
+    let b = named_job(&e, TOKEN_A, "b.txt").await;
+    let c = named_job(&e, TOKEN_A, "c.txt").await;
+    // Distinct, known ages: a is newest, c oldest.
+    for (id, secs) in [(a, 1.0), (b, 2.0), (c, 3.0)] {
+        sqlx::query(
+            "UPDATE ingest_jobs SET created_at = now() - make_interval(secs => $2) WHERE id = $1",
+        )
+        .bind(id)
+        .bind(secs)
+        .execute(&e.db.pool)
+        .await
+        .unwrap();
+    }
+    // dir defaults to asc.
+    let (ids, next) = list_page(&e, "sort=created&limit=2", TOKEN_A).await;
+    assert_eq!(
+        (ids, next),
+        (vec![c.to_string(), b.to_string()], json!("o:2"))
+    );
+    // The sorted second page: `before` is the offset cursor, not a job id.
+    let (ids, next) = list_page(&e, "sort=created&limit=2&before=o:2", TOKEN_A).await;
+    assert_eq!((ids, next), (vec![a.to_string()], Value::Null));
+    let (ids, next) = list_page(&e, "sort=created&dir=desc&limit=10", TOKEN_A).await;
+    assert_eq!(
+        (ids, next),
+        (
+            vec![a.to_string(), b.to_string(), c.to_string()],
+            Value::Null
+        )
+    );
+}
+
+#[tokio::test]
+async fn list_sorts_by_status() {
+    let e = env().await;
+    let completed = named_job(&e, TOKEN_A, "done.txt").await;
+    let failed = named_job(&e, TOKEN_A, "failed.txt").await;
+    let queued = named_job(&e, TOKEN_A, "queued.txt").await;
+    set_status(&e, completed, "completed", &[]).await;
+    set_status(&e, failed, "failed", &[]).await;
+    let (ids, _) = list_page(&e, "sort=status", TOKEN_A).await;
+    assert_eq!(
+        ids,
+        vec![
+            completed.to_string(),
+            failed.to_string(),
+            queued.to_string()
+        ],
+        "lower(status) asc"
+    );
+    let (ids, _) = list_page(&e, "sort=status&dir=desc", TOKEN_A).await;
+    assert_eq!(
+        ids,
+        vec![
+            queued.to_string(),
+            failed.to_string(),
+            completed.to_string()
+        ]
+    );
+}
+
+/// `sort=steps` orders by each job's step count (here 0 vs 1: one job's steps removed).
+#[tokio::test]
+async fn list_sorts_by_step_count() {
+    let e = env().await;
+    let none = named_job(&e, TOKEN_A, "none.txt").await;
+    let one = named_job(&e, TOKEN_A, "one.txt").await;
+    sqlx::query("DELETE FROM ingest_steps WHERE job_id = $1")
+        .bind(none)
+        .execute(&e.db.pool)
+        .await
+        .unwrap();
+    let (ids, _) = list_page(&e, "sort=steps", TOKEN_A).await;
+    assert_eq!(ids, vec![none.to_string(), one.to_string()]);
+    let (ids, _) = list_page(&e, "sort=steps&dir=desc", TOKEN_A).await;
+    assert_eq!(ids, vec![one.to_string(), none.to_string()]);
+}
+
+#[tokio::test]
+async fn list_rejects_unknown_sort_dir_and_bad_offset() {
+    let e = env().await;
+    let _ = named_job(&e, TOKEN_A, "a.txt").await;
+    for query in ["sort=bogus", "dir=sideways", "sort=created&dir=sideways"] {
+        let (s, v) = e
+            .call(
+                reqwest::Method::GET,
+                &format!("/api/ingest/jobs?{query}"),
+                TOKEN_A,
+            )
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{query}: {v}");
+    }
+    // A sorted list's `before` is `o:<offset>`, 0..=1_000_000.
+    for before in ["abc", "o:-1", "o:1000001", "o:x", "o:"] {
+        let (s, v) = e
+            .call(
+                reqwest::Method::GET,
+                &format!("/api/ingest/jobs?sort=created&before={before}"),
+                TOKEN_A,
+            )
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{before}: {v}");
+    }
+    // In the default order `o:<n>` is not a job id either.
+    let (s, v) = e
+        .call(reqwest::Method::GET, "/api/ingest/jobs?before=o:1", TOKEN_A)
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    // An offset past the end is an empty last page.
+    let (ids, next) = list_page(&e, "sort=created&before=o:50", TOKEN_A).await;
+    assert_eq!((ids, next), (Vec::<String>::new(), Value::Null));
+}
+
 #[tokio::test]
 async fn source_id_is_kept_in_meta_for_url_and_upload_jobs() {
     let e = env().await;

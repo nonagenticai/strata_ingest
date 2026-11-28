@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::postgres::PgRow;
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::db::steps::{self, ClaimedStep, StepKind};
@@ -534,6 +534,86 @@ pub async fn get(pool: &PgPool, tenant: Uuid, id: Uuid) -> Result<JobView> {
     })
 }
 
+/// Which `sort` a jobs list asked for. Each value maps to one fixed SQL expression here, so a
+/// caller's value is never interpolated into the query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sort {
+    Created,
+    Source,
+    Status,
+    Steps,
+    Cost,
+}
+
+impl Sort {
+    /// The `sort` query values the list accepts; `None` for anything else (the API answers 400).
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "created" => Self::Created,
+            "source" => Self::Source,
+            "status" => Self::Status,
+            "steps" => Self::Steps,
+            "cost" => Self::Cost,
+            _ => return None,
+        })
+    }
+
+    /// The ORDER BY key (the sorted query aliases the jobs table `j`).
+    fn expression(self) -> &'static str {
+        match self {
+            Self::Created => "j.created_at",
+            Self::Source => "lower(coalesce(j.source->>'filename', j.source->>'url', ''))",
+            Self::Status => "lower(j.status)",
+            Self::Steps => "(SELECT count(*) FROM ingest_steps st WHERE st.job_id = j.id)",
+            Self::Cost => {
+                "(SELECT coalesce(sum(st.cost_micros), 0) FROM ingest_steps st \
+                 WHERE st.job_id = j.id)"
+            }
+        }
+    }
+}
+
+/// A list's sort direction; `asc` unless asked otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Dir {
+    #[default]
+    Asc,
+    Desc,
+}
+
+impl Dir {
+    /// `asc` or `desc`; `None` for anything else (the API answers 400).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "asc" => Some(Self::Asc),
+            "desc" => Some(Self::Desc),
+            _ => None,
+        }
+    }
+
+    fn sql(self) -> &'static str {
+        match self {
+            Self::Asc => "ASC",
+            Self::Desc => "DESC",
+        }
+    }
+}
+
+/// What [`page`] selects: the filters, the order and where the page starts.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PageQuery<'a> {
+    pub store_id: Option<Uuid>,
+    pub status: Option<&'a str>,
+    /// Search tokens (lowercase, LIKE wildcards stripped), each a substring of `search_text`.
+    pub q: &'a [String],
+    /// `None`: newest first, cursor paging. `Some`: offset paging by that key.
+    pub sort: Option<Sort>,
+    pub dir: Dir,
+    /// Default order: a job id (the cursor). Sorted order: `o:<offset>`.
+    pub before: Option<&'a str>,
+    pub limit: i64,
+}
+
 /// The tenant's jobs, newest first, optionally filtered by store and status. `limit` is clamped
 /// to `1..=MAX_LIST_LIMIT`.
 pub async fn list(
@@ -543,56 +623,171 @@ pub async fn list(
     status: Option<&str>,
     limit: i64,
 ) -> Result<Vec<Job>> {
-    Ok(page(pool, tenant, store_id, status, None, limit).await?.0)
+    Ok(page(
+        pool,
+        tenant,
+        PageQuery {
+            store_id,
+            status,
+            limit,
+            ..PageQuery::default()
+        },
+    )
+    .await?
+    .0)
 }
 
-/// One page of [`list`]: the jobs strictly older than job `before` (by `created_at`, then id,
-/// the list order), and the cursor of the next page (the last job's id) when there are more.
-/// `before` must be one of the tenant's jobs (`NotFound` otherwise).
+/// One page of the tenant's jobs, as `query` describes it.
+///
+/// Without `sort`: newest first (`created_at`, then id); `before` is one of the tenant's job ids
+/// (`NotFound` otherwise) and the page holds the jobs older than it; `next` is the last job's id
+/// when more follow.
+///
+/// With `sort`: ordered by that key in `dir` (then `created_at`, then id); `before` is
+/// `o:<offset>` (`BadRequest` otherwise: `o:` followed by an integer 0..=1_000_000); `next` is
+/// `o:<offset + limit>` when the page was full.
 pub async fn page(
     pool: &PgPool,
     tenant: Uuid,
-    store_id: Option<Uuid>,
-    status: Option<&str>,
-    before: Option<Uuid>,
+    query: PageQuery<'_>,
+) -> Result<(Vec<Job>, Option<String>)> {
+    let limit = query.limit.clamp(1, MAX_LIST_LIMIT);
+    match query.sort {
+        None => page_by_created(pool, tenant, &query, limit).await,
+        Some(sort) => page_sorted(pool, tenant, &query, sort, limit).await,
+    }
+}
+
+/// Appends one `AND <column> LIKE '%token%'` per token (the tokens carry no LIKE wildcards).
+fn push_search(qb: &mut QueryBuilder<'_, Postgres>, column: &str, tokens: &[String]) {
+    for token in tokens {
+        qb.push(" AND ");
+        qb.push(column);
+        qb.push(" LIKE ");
+        qb.push_bind(format!("%{token}%"));
+    }
+}
+
+/// The offset a sorted page starts at: `before` absent → 0; `o:<n>` with `n` in 0..=1_000_000.
+fn sort_offset(before: Option<&str>) -> Result<i64> {
+    let Some(b) = before else { return Ok(0) };
+    b.strip_prefix("o:")
+        .and_then(|n| n.parse::<i64>().ok())
+        .filter(|n| (0..=1_000_000).contains(n))
+        .ok_or_else(|| {
+            IngestError::BadRequest(
+                "`before` must be `o:<offset>` for a sorted list, offset 0 to 1000000".into(),
+            )
+        })
+}
+
+/// [`page`] without `sort`: the created_at / id cursor order of [`list`].
+async fn page_by_created(
+    pool: &PgPool,
+    tenant: Uuid,
+    query: &PageQuery<'_>,
     limit: i64,
-) -> Result<(Vec<Job>, Option<Uuid>)> {
-    let limit = limit.clamp(1, MAX_LIST_LIMIT);
-    let cursor: Option<(DateTime<Utc>, Uuid)> = match before {
+) -> Result<(Vec<Job>, Option<String>)> {
+    let cursor: Option<(DateTime<Utc>, Uuid)> = match query.before {
         None => None,
-        Some(b) => Some(
-            sqlx::query_as("SELECT created_at, id FROM ingest_jobs WHERE id = $1 AND tenant = $2")
-                .bind(b)
+        Some(b) => {
+            let id = Uuid::parse_str(b)
+                .map_err(|_| IngestError::BadRequest("`before` must be one of your jobs".into()))?;
+            Some(
+                sqlx::query_as(
+                    "SELECT created_at, id FROM ingest_jobs WHERE id = $1 AND tenant = $2",
+                )
+                .bind(id)
                 .bind(tenant)
                 .fetch_optional(pool)
                 .await?
                 .ok_or(IngestError::NotFound)?,
-        ),
+            )
+        }
     };
-    let mut jobs = sqlx::query(concat!(
-        "SELECT ",
-        job_columns!(),
-        " FROM ingest_jobs
-         WHERE tenant = $1 AND ($2::uuid IS NULL OR store_id = $2)
-           AND ($3::text IS NULL OR status = $3)
-           AND ($5::timestamptz IS NULL OR (created_at, id) < ($5, $6))
-         ORDER BY created_at DESC, id DESC
-         LIMIT $4"
-    ))
-    .bind(tenant)
-    .bind(store_id)
-    .bind(status)
-    .bind(limit + 1)
-    .bind(cursor.map(|c| c.0))
-    .bind(cursor.map(|c| c.1))
-    .fetch_all(pool)
-    .await?
-    .iter()
-    .map(job_from_row)
-    .collect::<Result<Vec<_>>>()?;
+    let mut qb = QueryBuilder::<Postgres>::new("SELECT ");
+    qb.push(job_columns!());
+    qb.push(" FROM ingest_jobs WHERE tenant = ");
+    qb.push_bind(tenant);
+    if let Some(store_id) = query.store_id {
+        qb.push(" AND store_id = ");
+        qb.push_bind(store_id);
+    }
+    if let Some(status) = query.status {
+        qb.push(" AND status = ");
+        qb.push_bind(status);
+    }
+    push_search(&mut qb, "search_text", query.q);
+    if let Some((created_at, id)) = cursor {
+        qb.push(" AND (created_at, id) < (");
+        qb.push_bind(created_at);
+        qb.push(", ");
+        qb.push_bind(id);
+        qb.push(")");
+    }
+    qb.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+    qb.push_bind(limit + 1);
+    let mut jobs = qb
+        .build()
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(job_from_row)
+        .collect::<Result<Vec<_>>>()?;
     let more = jobs.len() as i64 > limit;
     jobs.truncate(limit as usize);
-    let next = more.then(|| jobs.last().map(|j| j.id)).flatten();
+    let next = more
+        .then(|| jobs.last().map(|j| j.id.to_string()))
+        .flatten();
+    Ok((jobs, next))
+}
+
+/// [`page`] with `sort`: offset paging over the sort key, then `created_at`, then id.
+async fn page_sorted(
+    pool: &PgPool,
+    tenant: Uuid,
+    query: &PageQuery<'_>,
+    sort: Sort,
+    limit: i64,
+) -> Result<(Vec<Job>, Option<String>)> {
+    let offset = sort_offset(query.before)?;
+    let expr = sort.expression();
+    let dir = query.dir.sql();
+    let mut qb = QueryBuilder::<Postgres>::new("SELECT ");
+    qb.push(job_columns!());
+    qb.push(" FROM ingest_jobs j WHERE j.tenant = ");
+    qb.push_bind(tenant);
+    if let Some(store_id) = query.store_id {
+        qb.push(" AND j.store_id = ");
+        qb.push_bind(store_id);
+    }
+    if let Some(status) = query.status {
+        qb.push(" AND j.status = ");
+        qb.push_bind(status);
+    }
+    push_search(&mut qb, "j.search_text", query.q);
+    qb.push(" ORDER BY (");
+    qb.push(expr);
+    qb.push(" IS NULL) ASC, ");
+    qb.push(expr);
+    qb.push(" ");
+    qb.push(dir);
+    qb.push(", j.created_at ");
+    qb.push(dir);
+    qb.push(", j.id ");
+    qb.push(dir);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+    qb.push(" LIMIT ");
+    qb.push_bind(limit);
+    let jobs = qb
+        .build()
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(job_from_row)
+        .collect::<Result<Vec<_>>>()?;
+    let next = (jobs.len() as i64 == limit).then(|| format!("o:{}", offset + limit));
     Ok((jobs, next))
 }
 
