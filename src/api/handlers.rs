@@ -354,16 +354,57 @@ pub struct ListParams {
     store_id: Option<Uuid>,
     #[serde(default)]
     status: Option<String>,
+    /// Case-insensitive search over the filename, URL, title and job id: whitespace-split into
+    /// at most 8 tokens of at most 64 characters, lowercased, `%` / `_` stripped; every token
+    /// must match.
+    #[serde(default)]
+    q: Option<String>,
+    /// Order key: `created` | `source` | `status` | `steps` | `cost` (unknown → 400).
+    #[serde(default)]
+    sort: Option<String>,
+    /// Order direction: `asc` (the default) | `desc` (unknown → 400).
+    #[serde(default)]
+    dir: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
+    /// Cursor: a job id in the default order, `o:<offset>` in a sorted order.
     #[serde(default)]
-    before: Option<Uuid>,
+    before: Option<String>,
 }
 
-/// `GET /api/ingest/jobs?store_id=&status=&limit=&before=` → `{"jobs": [...], "next": <job id> |
-/// null}`, newest first. `limit` defaults to 50; above 200 it is capped at 200; below 1 it is a
-/// 400. Unknown status → 400. `next` is set when more jobs follow: pass it as `before` for the
-/// next page (same filters). `before` must be one of the caller's job ids (400 otherwise).
+/// `q` as the search tokens the list matches: whitespace-split, lowercased, `%` and `_` (LIKE
+/// wildcards) removed, blank tokens dropped, at most 8 tokens of at most 64 characters.
+fn search_tokens(q: &str) -> Vec<String> {
+    const MAX_TOKENS: usize = 8;
+    const MAX_TOKEN_CHARS: usize = 64;
+    q.split_whitespace()
+        .map(|t| {
+            t.to_lowercase()
+                .chars()
+                .filter(|c| *c != '%' && *c != '_')
+                .take(MAX_TOKEN_CHARS)
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .take(MAX_TOKENS)
+        .collect()
+}
+
+/// `GET /api/ingest/jobs?store_id=&status=&q=&sort=&dir=&limit=&before=` → `{"jobs": [...],
+/// "next": <job id> | "o:<offset>" | null}`.
+///
+/// Newest first by default (`created_at`, then id). `limit` defaults to 50; above 200 it is
+/// capped at 200; below 1 it is a 400. Unknown status → 400. `next` is set when more jobs
+/// follow: pass it as `before` for the next page (same filters). In the default order `before`
+/// must be one of the caller's job ids (400 otherwise) and `next` is a job id.
+///
+/// `q` filters on the filename, URL, title and job id (see [`search_tokens`]): every token must
+/// match as a case-insensitive substring.
+///
+/// `sort` orders by `created` (created_at), `source` (filename or URL), `status`, `steps` (step
+/// count) or `cost` (total step cost); `dir` is `asc` (the default) or `desc`; an unknown `sort`
+/// or `dir` is a 400. A sorted list pages by offset instead: `next` is `o:<offset + limit>` when
+/// the page was full, and `before` must be `o:<offset>` (an integer 0..=1_000_000, else 400).
 pub async fn list_jobs(
     State(s): State<AppState>,
     Extension(Tenant(tenant)): Extension<Tenant>,
@@ -378,6 +419,20 @@ pub async fn list_jobs(
             JOB_STATUSES.join(", ")
         )));
     }
+    let sort = match p.sort.as_deref() {
+        None => None,
+        Some(s) => Some(jobs::Sort::parse(s).ok_or_else(|| {
+            bad(format!(
+                "unknown sort `{s}`; one of created, source, status, steps, cost"
+            ))
+        })?),
+    };
+    let dir = match p.dir.as_deref() {
+        None => jobs::Dir::Asc,
+        Some(d) => jobs::Dir::parse(d)
+            .ok_or_else(|| bad(format!("unknown dir `{d}`; one of asc, desc")))?,
+    };
+    let tokens = p.q.as_deref().map(search_tokens).unwrap_or_default();
     let limit = p.limit.unwrap_or(LIST_DEFAULT_LIMIT);
     if limit < 1 {
         return Err(bad("`limit` must be >= 1"));
@@ -385,10 +440,15 @@ pub async fn list_jobs(
     let (list, next) = jobs::page(
         &s.ctx.pool,
         tenant,
-        p.store_id,
-        p.status.as_deref(),
-        p.before,
-        limit.min(MAX_LIST_LIMIT),
+        jobs::PageQuery {
+            store_id: p.store_id,
+            status: p.status.as_deref(),
+            q: &tokens,
+            sort,
+            dir,
+            before: p.before.as_deref(),
+            limit: limit.min(MAX_LIST_LIMIT),
+        },
     )
     .await
     .map_err(|e| match e {
