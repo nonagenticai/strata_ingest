@@ -659,7 +659,7 @@ pub async fn page(
 }
 
 /// Appends one `AND <column> LIKE '%token%'` per token (the tokens carry no LIKE wildcards).
-fn push_search(qb: &mut QueryBuilder<'_, Postgres>, column: &str, tokens: &[String]) {
+fn push_search(qb: &mut QueryBuilder<Postgres>, column: &str, tokens: &[String]) {
     for token in tokens {
         qb.push(" AND ");
         qb.push(column);
